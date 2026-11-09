@@ -1,8 +1,9 @@
 # order_tool.py
 # Author: Maxine Coimin
 
+
 class OrderLookup:
-    """ This is a tool that only knows about orders """
+    """This is a tool that only knows about orders"""
 
     def __init__(self, orders):
         """Store the orders this tool can look up."""
