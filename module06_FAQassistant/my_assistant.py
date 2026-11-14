@@ -1,18 +1,21 @@
 # my_assistant.py
 # Author: Maxine Coimin
 
-HANDOFF_WORDS = ["refund", "cancel", "change", "pay", "update"]
+
+HANDOFF_WORDS = ["refund", "cancel", "card", "pay", "payment"]
+MAX_TOOL_ROUNDS = 3
 
 
 class InvoiceAssistant:
     """An invoice assistant. It does not use AI, just the rules"""
 
-    def __init__(self, name, instructions, invoice_tool):
+    def __init__(self, name, instructions, tools, model):
         """Set up one assistant with its own name, instructions, tool, and history."""
         self.name = name
         self.instructions = instructions
-        self.invoice_tool = invoice_tool
         self.history = []
+        self.model = model
+        self.tools = tools
 
     def respond(self, user_message):
         """Record the user's message, choose a reply, record it, and return it."""
@@ -22,15 +25,10 @@ class InvoiceAssistant:
         return reply
 
     def choose_reply(self, user_message):
-        """Choose a reply with keyword rules. This is the mock part."""
-        text = user_message.lower()
-        if self.needs_human(text):
-            return "I can't change invoices or take payments here. I'm passing you to a billing specialist."
-        if "invoice" in text or "status" in text or "INV-" in text.upper():
-            return self.invoice_reply(user_message)
-        if "hello" in text or "hi" in text:
-            return f"Hello! I'm {self.name}. I can check an invoice status for you."
-        return "I'm not sure how to help with that. I can check the retrspoctive invoice status."
+        """Pass payment questions to a person. Send everything else to the model."""
+        if self.needs_human(user_message.lower()):
+            return "I can't help with that here. I'm passing you to a human agent."
+        return self.model_reply()
 
     def needs_human(self, text):
         """Return True if the message is about something a person must handle."""
@@ -39,21 +37,26 @@ class InvoiceAssistant:
                 return True
         return False
 
-    def invoice_reply(self, user_message):
-        """Use the invoice tool to advise status of invoice."""
-        invoice_id = self.invoice_tool.find_invoice_id(user_message)
-
-        if invoice_id is None:
-            if "INV-" in user_message.upper():
-                for word in user_message.upper().split():
-                    if "INV-" in word:
-                        invoice_id = word.strip(".,;:!?()[]")
-                        break
-            else:
-                return "Which invoice? Please send an invoice ID like INV-1001."
-
-        status = self.invoice_tool.find_status(invoice_id)
-        if status is None:
-            return f"I couldn't find any record for {invoice_id}. Please double-check the ID."
-
-        return f"Invoice {invoice_id} is {status}."
+    def model_reply(self):
+        """Ask the model. Run each tool it asks for, then ask again, up to a limit."""
+        rounds = 0
+        while rounds < MAX_TOOL_ROUNDS:
+            tool_list = self.tools.tool_list()
+            decision = self.model.decide(self.instructions, self.history, tool_list)
+            if decision is None:
+                return "Sorry, I can't answer that right now. Please try again in a moment."
+            if "text" in decision:
+                return decision["text"]
+            name = decision["tool"]
+            arguments = decision["arguments"]
+            result = self.tools.run(name, arguments, self.history)
+            self.history.append(
+                {
+                    "role": "tool",
+                    "tool_name": name,
+                    "arguments": arguments,
+                    "content": result,
+                }
+            )
+            rounds += 1
+        return "Sorry, I couldn't finish that. I'm passing you to a human agent."

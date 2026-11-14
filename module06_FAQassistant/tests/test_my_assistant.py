@@ -1,51 +1,82 @@
 # tests/test_my_assistant.py
 # Author: Maxine Coimin
 
+from change_queue import ChangeQueue
+from fake_model import FakeModel
 from my_assistant import InvoiceAssistant
 from my_tool import InvoiceLookup
+from my_toolbox import Toolbox
 
 
-def make_bot():
-    invoices = {"INV-1001": "paid", "INV-1002": "unpaid", "INV-1004": "in progress"}
-    tool = InvoiceLookup(invoices)
-    return InvoiceAssistant("TestBot", "Test instructions", tool)
+def make_bot(model):
+    invoices = {
+        "INV-1001": {
+            "status": "paid",
+            "billing_address": "123 Business St, BeeTown, USA",
+        },
+        "INV-1002": {
+            "status": "unpaid",
+            "billing_address": "456 Corporate Ave, CeeTown, USA",
+        },
+        "INV-1003": {
+            "status": "paid",
+            "billing_address": "789 Industrial Blvd, EyeTown, USA",
+        },
+        "INV-1004": {
+            "status": "in progress",
+            "billing_address": "321 Commercial Rd, ComTown, USA",
+        },
+    }
+    invoice_tool = InvoiceLookup(invoices)
+    tools = Toolbox(invoice_tool, ChangeQueue(invoice_tool))
+    return InvoiceAssistant("Ayo", "Be helpful", tools, model)
 
 
-def test_tool_lookup_found_and_missing():
-    tool = InvoiceLookup({"INV-1001": "paid"})
-    assert tool.find_invoice_id("What about INV-1001?") == "INV-1001"
-    assert tool.find_status("INV-1001") == "paid"
-    assert tool.find_status("INV-9999") is None
+def ask_for_tool(name, arguments):
+    """Build the decision a model returns when it wants a tool."""
+    return {"tool": name, "arguments": arguments}
 
 
-def test_status_lookup_uses_tool():
-    bot = make_bot()
-    reply = bot.respond("What is the status of INV-1002?")
-    assert reply == "Invoice INV-1002 is unpaid."
+def test_made_up_address_is_refused():
+    model = FakeModel(
+        [
+            ask_for_tool(
+                "request_address_change",
+                {"invoice_id": "INV-1001", "new_address": "123 Main St, AnyTown, USA"},
+            ),
+            {"text": "What is the new address?"},
+        ]
+    )
+    bot = make_bot(model)
+    bot.respond("Please change the address on invoice INV-1001")
+    assert "has not given that address" in bot.history[1]["content"]
+    assert bot.tools.change_queue.waiting() == []
 
 
-def test_missing_invoice_gets_helpful_reply():
-    bot = make_bot()
-    reply = bot.respond("Check INV-9999 please")
-    assert "couldn't find any record" in reply
+def test_address_change_waits_for_staff():
+    model = FakeModel(
+        [
+            ask_for_tool(
+                "request_address_change",
+                {
+                    "invoice_id": "INV-1001",
+                    "new_address": "9 Pine Street, SomeTown, USA",
+                },
+            ),
+            {"text": "Sent to staff."},
+        ]
+    )
+    bot = make_bot(model)
+    bot.respond(
+        "Change the address on invoice INV-1001 to 9 Pine Street, SomeTown, USA"
+    )
+    assert len(bot.tools.change_queue.waiting()) == 1
+    assert (
+        bot.tools.invoice_tool.invoices["INV-1001"]["billing_address"]
+        == "123 Business St, BeeTown, USA"
+    )
 
 
-def test_history_records_every_turn():
-    bot = make_bot()
-    bot.respond("hello")
-    bot.respond("status of INV-1001")
-    assert len(bot.history) == 4
-    assert bot.history[0]["role"] == "user"
-    assert bot.history[1]["role"] == "assistant"
-
-
-def test_human_handoff_for_change_request():
-    bot = make_bot()
-    reply = bot.respond("Please refund INV-1002")
-    assert "passing you to a billing specialist" in reply
-
-
-def test_unknown_request_is_safe():
-    bot = make_bot()
-    reply = bot.respond("Do you validate parking?")
-    assert "not sure how to help" in reply
+def test_payment_question_never_reaches_the_model():
+    bot = make_bot(FakeModel([]))
+    assert "human" in bot.respond("Can I pay with a different card?")
