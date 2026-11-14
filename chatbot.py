@@ -1,73 +1,69 @@
 # chatbot.py
 # Author: Maxine Coimin
 
-from mock_model import MockModel
+HANDOFF_WORDS = ["payment", "card"]
+MAX_TOOL_ROUNDS = 3
 
 
 class SupportChatbot:
-    def __init__(self, name, instructions, order_tool, stock_tool, model=None):
+    """A support chatbot. The model decides. The toolbox checks every tool request."""
+
+    def __init__(self, name, instructions, tools, model):
+        """Set up one chatbot with its own name, instructions, tools, model, and history."""
         self.name = name
         self.instructions = instructions
-        self.order_tool = order_tool
-        self.stock_tool = stock_tool
-        self.model = model if model is not None else MockModel()
+        self.tools = tools
+        self.model = model
         self.history = []
 
-    def respond(self, message):
-        return self.choose_reply(message)
-
-    def needs_human(self, text):
-        return "address" in text or "human" in text
-
-    def order_reply(self, message):
-        import re
-
-        match = re.search(r"A\d+", message.upper())
-        if match:
-            order_id = match.group()
-            status = self.order_tool.find_status(order_id)
-            if status:
-                return f"Order {order_id} is {status}."
-            return "I couldn't find that order."
-        return "Please provide your order ID."
-
-    def stock_reply(self, message):
-        text = message.lower()
-        for item in ["skirt", "crop top", "shorts"]:
-            if item in text:
-                qty = (
-                    self.stock_tool.find_stock(item)
-                    if hasattr(self.stock_tool, "find_stock")
-                    else None
-                )
-                if qty is None and hasattr(self.stock_tool, "stock"):
-                    qty = self.stock_tool.stock.get(item)
-                if qty is None:
-                    # fallback to a dict lookup
-                    qty = getattr(self.stock_tool, "data", {}).get(item)
-                if qty is not None:
-                    return f"There are {qty} {item}(s) in stock."
-        return "I'm not sure about that item."
-
-    def model_reply(self):
-        reply = self.model.reply(self.instructions, self.history)
-        if reply is None:
-            return "I'm not sure, sorry. Please try again in a moment."
-        return reply
-
-    def choose_reply(self, user_message):
+    def respond(self, user_message):
+        """Record the user's message, choose a reply, record it, and return it."""
         self.history.append({"role": "user", "content": user_message})
-        text = user_message.lower()
-        if self.needs_human(text):
-            reply = "I can't help with that here. I'm passing you to a human agent."
-        elif "order" in text:
-            reply = self.order_reply(user_message)
-        elif "stock" in text or "in stock" in text:
-            reply = self.stock_reply(user_message)
-        else:
-            reply = self.model_reply()
+        reply = self.choose_reply(user_message)
         self.history.append({"role": "assistant", "content": reply})
         return reply
 
+    def choose_reply(self, user_message):
+        """Pass payment questions to a person. Send everything else to the model."""
+        if self.needs_human(user_message.lower()):
+            return "I can't help with that here. I'm passing you to a human agent."
+        return self.model_reply()
+
+    def needs_human(self, text):
+        """Return True if the message is about something a person must handle."""
+        for word in HANDOFF_WORDS:
+            if word in text:
+                return True
+        return False
+
+    def model_reply(self):
+        """Ask the model. Run each tool it asks for, then ask again, up to a limit."""
+        rounds = 0
+        while rounds < MAX_TOOL_ROUNDS:
+            tool_list = self.tools.tool_list()
+            decision = self.model.decide(self.instructions, self.history, tool_list)
+            if decision is None:
+                return "Sorry, I can't answer that right now. Please try again in a moment."
+            if "text" in decision:
+                return decision["text"]
+            name = decision["tool"]
+            arguments = decision["arguments"]
+            result = self.tools.run(name, arguments, self.history)
+            self.history.append(
+                {
+                    "role": "tool",
+                    "tool_name": name,
+                    "arguments": arguments,
+                    "content": result,
+                }
+            )
+            rounds += 1
+        return "Sorry, I couldn't finish that. I'm passing you to a human agent."
+
     def count_user_messages(self):
-        return sum(1 for m in self.history if m["role"] == "user")
+        """Return how many messages the user has sent so far."""
+        count = 0
+        for message in self.history:
+            if message["role"] == "user":
+                count += 1
+        return count

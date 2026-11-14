@@ -1,10 +1,12 @@
 # two_bots.py - Exercise 4
 # Author: Maxine Coimin
 
+from change_queue import ChangeQueue
 from chatbot import SupportChatbot
-from mock_model import MockModel
+from keyword_model import KeywordModel
 from order_tool import OrderLookup
 from stock_tool import StockLookup
+from toolbox import Toolbox
 
 order_tool = OrderLookup({"A100": "shipped", "A101": "processing", "A102": "delivered"})
 stock_tool = StockLookup(
@@ -14,11 +16,12 @@ stock_tool = StockLookup(
         "shorts": 0,
     }
 )
+tools = Toolbox(order_tool, stock_tool, ChangeQueue(order_tool))
 
-model = MockModel()
+model = KeywordModel()
 
-sunny = SupportChatbot("Sunny", "You are cheerful and brief.", order_tool, stock_tool)
-river = SupportChatbot("River", "You are formal and detailed.", order_tool, stock_tool)
+sunny = SupportChatbot("Sunny", "You are cheerful and brief.", tools, model)
+river = SupportChatbot("River", "You are formal and detailed.", tools, model)
 
 sunny.respond("hello")
 sunny.respond("Where is order A100?")
